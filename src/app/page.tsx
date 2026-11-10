@@ -26,6 +26,12 @@ type QuizQuestion = {
   correctAnswer: string;
 };
 
+type AdminQuizQuestion = {
+  id: number;
+  question: string;
+  options: QuizOption[];
+};
+
 const answerKeys = ["A", "B", "C", "D"];
 
 function shuffle<T>(items: T[]): T[] {
@@ -62,6 +68,19 @@ export default function Home() {
   const [quizFinished, setQuizFinished] = useState(false);
   const [quizAnswer, setQuizAnswer] = useState("");
   const [correctAnswer, setCorrectAnswer] = useState("");
+
+  // Admin-created quiz states
+  const [adminQuizQuestions, setAdminQuizQuestions] = useState<AdminQuizQuestion[]>([]);
+  const [adminQuizzesLoaded, setAdminQuizzesLoaded] = useState(false);
+  const [adminQuizLoading, setAdminQuizLoading] = useState(false);
+  const [adminQuizError, setAdminQuizError] = useState("");
+  const [adminQuizStarted, setAdminQuizStarted] = useState(false);
+  const [adminQuizFinished, setAdminQuizFinished] = useState(false);
+  const [adminQuizIndex, setAdminQuizIndex] = useState(0);
+  const [adminQuizScore, setAdminQuizScore] = useState(0);
+  const [adminQuizAnswer, setAdminQuizAnswer] = useState("");
+  const [adminCorrectAnswer, setAdminCorrectAnswer] = useState("");
+  const [adminQuizChecking, setAdminQuizChecking] = useState(false);
 
   const progress =
     words.length === 0
@@ -183,6 +202,173 @@ export default function Home() {
     setQuizError("");
     setQuizFinished(false);
     setQuizStarted(true);
+  }
+
+  // Load quizzes created by the admin through the protected API.
+  async function loadAdminQuizzes() {
+    setAdminQuizLoading(true);
+    setAdminQuizError("");
+
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError) {
+        throw new Error(sessionError.message);
+      }
+
+      if (!session?.access_token) {
+        throw new Error("Please log in again to view quizzes.");
+      }
+
+      const response = await fetch("/api/quiz", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        cache: "no-store",
+      });
+
+      const result = (await response.json()) as {
+        quizzes?: AdminQuizQuestion[];
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(result.error || "Could not load admin quizzes.");
+      }
+
+      setAdminQuizQuestions(
+        Array.isArray(result.quizzes) ? result.quizzes : []
+      );
+      setAdminQuizzesLoaded(true);
+      setAdminQuizStarted(false);
+      setAdminQuizFinished(false);
+      setAdminQuizIndex(0);
+      setAdminQuizScore(0);
+      setAdminQuizAnswer("");
+      setAdminCorrectAnswer("");
+    } catch (error) {
+      console.error("Admin quiz loading error:", error);
+      setAdminQuizError(
+        error instanceof Error
+          ? error.message
+          : "Could not load admin quizzes."
+      );
+    } finally {
+      setAdminQuizLoading(false);
+    }
+  }
+
+  function startAdminQuiz() {
+    setAdminQuizIndex(0);
+    setAdminQuizScore(0);
+    setAdminQuizAnswer("");
+    setAdminCorrectAnswer("");
+    setAdminQuizError("");
+    setAdminQuizFinished(false);
+    setAdminQuizStarted(true);
+  }
+
+  // Admin answers are checked by the server. The correct answer is not
+  // downloaded with the question list.
+  async function handleAdminQuizAnswer(answer: string) {
+    const currentQuestion = adminQuizQuestions[adminQuizIndex];
+
+    if (
+      !currentQuestion ||
+      adminQuizAnswer !== "" ||
+      adminQuizChecking
+    ) {
+      return;
+    }
+
+    setAdminQuizChecking(true);
+    setAdminQuizError("");
+
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError) {
+        throw new Error(sessionError.message);
+      }
+
+      if (!session?.access_token) {
+        throw new Error("Your session has expired. Please log in again.");
+      }
+
+      const response = await fetch("/api/quiz", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          quizId: currentQuestion.id,
+          answer,
+        }),
+      });
+
+      const result = (await response.json()) as {
+        isCorrect?: boolean;
+        correctAnswer?: string;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(result.error || "Could not check your answer.");
+      }
+
+      if (
+        typeof result.isCorrect !== "boolean" ||
+        typeof result.correctAnswer !== "string"
+      ) {
+        throw new Error("The server returned an invalid quiz response.");
+      }
+
+      setAdminQuizAnswer(answer);
+      setAdminCorrectAnswer(result.correctAnswer);
+
+      if (result.isCorrect) {
+        setAdminQuizScore((score) => score + 1);
+      }
+    } catch (error) {
+      console.error("Admin quiz answer error:", error);
+      setAdminQuizError(
+        error instanceof Error
+          ? error.message
+          : "Could not check your answer."
+      );
+    } finally {
+      setAdminQuizChecking(false);
+    }
+  }
+
+  function nextAdminQuizQuestion() {
+    if (adminQuizIndex === adminQuizQuestions.length - 1) {
+      setAdminQuizFinished(true);
+    } else {
+      setAdminQuizIndex((index) => index + 1);
+    }
+
+    setAdminQuizAnswer("");
+    setAdminCorrectAnswer("");
+    setAdminQuizError("");
+  }
+
+  function exitAdminQuiz() {
+    setAdminQuizStarted(false);
+    setAdminQuizFinished(false);
+    setAdminQuizIndex(0);
+    setAdminQuizScore(0);
+    setAdminQuizAnswer("");
+    setAdminCorrectAnswer("");
+    setAdminQuizError("");
   }
 
   // Check answer locally
@@ -395,7 +581,189 @@ export default function Home() {
             </div>
           </div>
 
-          {/* AUTOMATIC QUIZ */}
+          {/* ADMIN-CREATED QUIZZES */}
+          <div className="mb-8 rounded-2xl border border-sky-400/20 bg-slate-900 p-5 sm:p-8">
+            <div className="mb-5">
+              <span className="text-sm font-semibold text-sky-400">
+                MY QUIZZES
+              </span>
+
+              <h3 className="mt-2 text-2xl font-bold">
+                Admin-created Quizzes
+              </h3>
+
+              <p className="mt-2 text-sm text-slate-400">
+                Take quizzes prepared by the VocabHub admin.
+              </p>
+            </div>
+
+            {adminQuizError && (
+              <p className="mb-4 rounded-xl border border-red-400/20 bg-red-400/10 p-3 text-sm text-red-300">
+                {adminQuizError}
+              </p>
+            )}
+
+            {!adminQuizStarted ? (
+              <div>
+                {adminQuizzesLoaded && adminQuizQuestions.length > 0 ? (
+                  <>
+                    <p className="text-sm text-slate-300">
+                      {adminQuizQuestions.length} question(s) available.
+                    </p>
+
+                    <div className="mt-5 flex flex-wrap gap-2">
+                      <button
+                        onClick={startAdminQuiz}
+                        className="rounded-xl bg-sky-400 px-6 py-3 font-bold text-slate-950 transition hover:bg-sky-300"
+                      >
+                        Start Admin Quiz
+                      </button>
+
+                      <button
+                        onClick={loadAdminQuizzes}
+                        disabled={adminQuizLoading}
+                        className="rounded-xl border border-white/20 px-6 py-3 font-semibold transition hover:bg-white/10 disabled:opacity-50"
+                      >
+                        {adminQuizLoading ? "Loading..." : "Refresh"}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm text-slate-400">
+                      {adminQuizzesLoaded
+                        ? "No admin quizzes are available yet."
+                        : "Load the latest quizzes created by the admin."}
+                    </p>
+
+                    <button
+                      onClick={loadAdminQuizzes}
+                      disabled={adminQuizLoading}
+                      className="mt-5 rounded-xl bg-sky-400 px-6 py-3 font-bold text-slate-950 transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {adminQuizLoading ? "Loading Quizzes..." : "Load My Quizzes"}
+                    </button>
+                  </>
+                )}
+              </div>
+            ) : adminQuizFinished ? (
+              <div>
+                <p className="text-xl font-bold">Quiz completed!</p>
+
+                <p className="mt-2 text-slate-300">
+                  Your score: {adminQuizScore} / {adminQuizQuestions.length}
+                </p>
+
+                <p className="mt-2 text-sm text-sky-400">
+                  {adminQuizQuestions.length > 0
+                    ? Math.round(
+                        (adminQuizScore / adminQuizQuestions.length) * 100
+                      )
+                    : 0}
+                  % correct answers
+                </p>
+
+                <div className="mt-5 flex flex-wrap gap-2">
+                  <button
+                    onClick={startAdminQuiz}
+                    className="rounded-xl bg-sky-400 px-6 py-3 font-bold text-slate-950 transition hover:bg-sky-300"
+                  >
+                    Try Again
+                  </button>
+
+                  <button
+                    onClick={exitAdminQuiz}
+                    className="rounded-xl border border-white/20 px-6 py-3 font-semibold transition hover:bg-white/10"
+                  >
+                    Back to My Quizzes
+                  </button>
+                </div>
+              </div>
+            ) : adminQuizQuestions[adminQuizIndex] ? (
+              <div>
+                <div className="mb-4 flex justify-between text-sm text-slate-400">
+                  <span>
+                    Question {adminQuizIndex + 1} / {adminQuizQuestions.length}
+                  </span>
+
+                  <span>Score: {adminQuizScore}</span>
+                </div>
+
+                <div className="mb-4 h-2 overflow-hidden rounded-full bg-slate-800">
+                  <div
+                    className="h-full rounded-full bg-sky-400 transition-all"
+                    style={{
+                      width: `${
+                        ((adminQuizIndex + 1) / adminQuizQuestions.length) * 100
+                      }%`,
+                    }}
+                  />
+                </div>
+
+                <h4 className="mb-5 text-2xl font-bold">
+                  {adminQuizQuestions[adminQuizIndex].question}
+                </h4>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {adminQuizQuestions[adminQuizIndex].options.map((option) => (
+                    <button
+                      key={option.key}
+                      disabled={adminQuizAnswer !== "" || adminQuizChecking}
+                      onClick={() => void handleAdminQuizAnswer(option.key)}
+                      className={`rounded-xl border p-4 text-left text-sm transition ${
+                        adminQuizAnswer === option.key
+                          ? option.key === adminCorrectAnswer
+                            ? "border-emerald-400 bg-emerald-400/20 text-emerald-300"
+                            : "border-red-400 bg-red-400/20 text-red-300"
+                          : adminQuizAnswer !== "" &&
+                              option.key === adminCorrectAnswer
+                            ? "border-emerald-400 bg-emerald-400/20 text-emerald-300"
+                            : "border-white/10 bg-slate-800 hover:border-sky-400"
+                      }`}
+                    >
+                      <span className="font-bold">{option.key}.</span>{" "}
+                      {option.text}
+                    </button>
+                  ))}
+                </div>
+
+                {adminQuizChecking && (
+                  <p className="mt-4 text-sm text-slate-400">
+                    Checking your answer...
+                  </p>
+                )}
+
+                {adminQuizAnswer !== "" && (
+                  <div className="mt-5">
+                    <p className="font-semibold">
+                      {adminQuizAnswer === adminCorrectAnswer
+                        ? "Correct! 🎉"
+                        : `Incorrect. Correct answer: ${
+                            adminQuizQuestions[adminQuizIndex].options.find(
+                              (option) => option.key === adminCorrectAnswer
+                            )?.text ?? adminCorrectAnswer
+                          }`}
+                    </p>
+
+                    <button
+                      onClick={nextAdminQuizQuestion}
+                      className="mt-4 rounded-xl bg-sky-400 px-6 py-3 font-bold text-slate-950 transition hover:bg-sky-300"
+                    >
+                      {adminQuizIndex === adminQuizQuestions.length - 1
+                        ? "See Results"
+                        : "Next Question"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-400">
+                No question is available. Please reload the quizzes.
+              </p>
+            )}
+          </div>
+
+          {/* AUTOMATIC PRACTICE */}
           <div className="mb-8 rounded-2xl border border-emerald-400/20 bg-slate-900 p-5 sm:p-8">
             <div className="mb-5">
               <span className="text-sm font-semibold text-emerald-400">
@@ -403,7 +771,7 @@ export default function Home() {
               </span>
 
               <h3 className="mt-2 text-2xl font-bold">
-                Automatic Vocabulary Quiz
+                Automatic Practice Quiz
               </h3>
 
               <p className="mt-2 text-sm text-slate-400">
